@@ -1,5 +1,5 @@
 {
-    "name": "rocketweb/error-tracker",
+    "name": "rocketweb-my/error-tracker-package",
     "description": "Error tracking package for Laravel applications",
     "type": "library",
     "license": "MIT",
