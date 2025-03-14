@@ -265,29 +265,28 @@ class ErrorTracker
 // In src/ErrorTracker.php, modify the sendToApi method:
     protected function sendToApi(array $data)
     {
+        // Configure the HTTP client to ignore SSL certificate issues
+        $this->httpClient = new \GuzzleHttp\Client([
+            'timeout' => config('error-tracker.http_client.timeout', 5),
+            'verify' => false, // Ignore SSL certificate issues
+        ]);
+    
         $retries = config('error-tracker.http_client.retry', 3);
         $attempt = 0;
         $success = false;
     
-        // Configure the HTTP client with options to prevent redirect conversion
-        $this->httpClient = new \GuzzleHttp\Client([
-            'timeout' => config('error-tracker.http_client.timeout', 5),
-            'allow_redirects' => false, // Prevent automatic redirection
-        ]);
+        // Make sure we're using HTTPS
+        $url = rtrim($this->dashboardUrl, '/');
+        if (!str_starts_with($url, 'https://')) {
+            $url = str_replace('http://', 'https://', $url);
+        }
+        $url .= '/api/errors';
     
         while ($attempt < $retries && !$success) {
             try {
-                // Try both HTTP and HTTPS
-                $protocol = $attempt % 2 == 0 ? 'https' : 'http';
-                $baseUrl = rtrim($this->dashboardUrl, '/');
-                $baseUrl = preg_replace('#^https?://#', $protocol . '://', $baseUrl);
-                
-                $url = $baseUrl . '/api/errors';
-                
                 \Illuminate\Support\Facades\Log::info('ErrorTracker sending request', [
                     'url' => $url,
-                    'attempt' => $attempt + 1,
-                    'protocol' => $protocol
+                    'attempt' => $attempt + 1
                 ]);
     
                 $response = $this->httpClient->request(
@@ -305,36 +304,12 @@ class ErrorTracker
                 );
     
                 $statusCode = $response->getStatusCode();
-                
-                // If we get a redirect, follow it manually as POST
-                if ($statusCode >= 300 && $statusCode < 400 && $response->hasHeader('Location')) {
-                    $redirectUrl = $response->getHeader('Location')[0];
-                    \Illuminate\Support\Facades\Log::info('Following redirect as POST', [
-                        'redirect_url' => $redirectUrl
-                    ]);
-                    
-                    $response = $this->httpClient->request(
-                        'POST',
-                        $redirectUrl,
-                        [
-                            'headers' => [
-                                'Authorization' => 'Bearer ' . $this->apiKey,
-                                'Content-Type' => 'application/json',
-                                'Accept' => 'application/json',
-                            ],
-                            'json' => $data,
-                            'http_errors' => false,
-                        ]
-                    );
-                    
-                    $statusCode = $response->getStatusCode();
-                }
-                
                 $success = $statusCode >= 200 && $statusCode < 300;
                 
                 \Illuminate\Support\Facades\Log::info('ErrorTracker received response', [
                     'status_code' => $statusCode,
-                    'success' => $success
+                    'success' => $success,
+                    'response' => (string)$response->getBody()
                 ]);
                 
                 if ($success) {
