@@ -52,6 +52,7 @@ class ErrorTracker
         $this->dashboardUrl = $dashboardUrl;
         $this->httpClient = new Client([
             'timeout' => config('error-tracker.http_client.timeout', 5),
+            'verify' => false, // Ignore SSL certificate issues for local development
         ]);
     }
 
@@ -63,25 +64,16 @@ class ErrorTracker
      */
     public function reportException(Throwable $exception)
     {
-        \Illuminate\Support\Facades\Log::info('ErrorTracker reportException called', [
-            'exception' => get_class($exception),
-            'message' => $exception->getMessage()
-        ]);
-    
         // Check if error tracking is enabled
         if (!config('error-tracker.enabled', true)) {
-            \Illuminate\Support\Facades\Log::info('ErrorTracker is disabled');
-            return false;
-        }
-        
-        // Check if error tracking is enabled
-        if (!config('error-tracker.enabled', true)) {
+            Log::info('ErrorTracker is disabled');
             return false;
         }
 
         // Check if the current environment should report errors
         $environment = app()->environment();
         if (!in_array($environment, config('error-tracker.environments', ['production']))) {
+            Log::info('ErrorTracker: Current environment not in tracking list', ['env' => $environment]);
             return false;
         }
 
@@ -89,11 +81,19 @@ class ErrorTracker
         $excludedExceptions = config('error-tracker.exclude_exceptions', []);
         foreach ($excludedExceptions as $excludedException) {
             if ($exception instanceof $excludedException) {
+                Log::info('ErrorTracker: Exception type excluded', ['type' => get_class($exception)]);
                 return false;
             }
         }
 
         try {
+            Log::info('ErrorTracker: Reporting exception', [
+                'type' => get_class($exception),
+                'message' => $exception->getMessage(),
+                'file' => $exception->getFile(),
+                'line' => $exception->getLine()
+            ]);
+            
             // Format the exception data
             $data = $this->formatException($exception);
             
@@ -101,7 +101,11 @@ class ErrorTracker
             return $this->sendToApi($data);
         } catch (\Exception $e) {
             // Log any errors that occur during reporting
-            Log::error('Failed to report exception to error tracker: ' . $e->getMessage());
+            Log::error('Failed to report exception to error tracker: ' . $e->getMessage(), [
+                'exception' => get_class($e),
+                'file' => $e->getFile(),
+                'line' => $e->getLine()
+            ]);
             return false;
         }
     }
@@ -151,7 +155,7 @@ class ErrorTracker
                 'laravel_version' => app()->version(),
                 'server' => isset($_SERVER['SERVER_SOFTWARE']) ? $_SERVER['SERVER_SOFTWARE'] : null,
             ],
-            'environment' => $environment,
+            'environment' => app()->environment(),
             'occurred_at' => now()->toIso8601String(),
         ];
     }
@@ -262,33 +266,34 @@ class ErrorTracker
      * @param  array  $data
      * @return bool
      */
-// In src/ErrorTracker.php, modify the sendToApi method:
     protected function sendToApi(array $data)
     {
         // Configure the HTTP client to ignore SSL certificate issues
-        $this->httpClient = new \GuzzleHttp\Client([
+        $this->httpClient = new Client([
             'timeout' => config('error-tracker.http_client.timeout', 5),
             'verify' => false, // Ignore SSL certificate issues
         ]);
-    
+
         $retries = config('error-tracker.http_client.retry', 3);
         $attempt = 0;
         $success = false;
-    
+
         // Make sure we're using HTTPS
         $url = rtrim($this->dashboardUrl, '/');
         if (!str_starts_with($url, 'https://')) {
             $url = str_replace('http://', 'https://', $url);
         }
         $url .= '/api/errors';
-    
+
         while ($attempt < $retries && !$success) {
             try {
-                \Illuminate\Support\Facades\Log::info('ErrorTracker sending request', [
+                Log::info('ErrorTracker sending request', [
                     'url' => $url,
-                    'attempt' => $attempt + 1
+                    'attempt' => $attempt + 1,
+                    'app_id' => $this->appId,
+                    'api_key_exists' => !empty($this->apiKey)
                 ]);
-    
+
                 $response = $this->httpClient->request(
                     'POST',
                     $url,
@@ -302,11 +307,11 @@ class ErrorTracker
                         'http_errors' => false,
                     ]
                 );
-    
+
                 $statusCode = $response->getStatusCode();
                 $success = $statusCode >= 200 && $statusCode < 300;
                 
-                \Illuminate\Support\Facades\Log::info('ErrorTracker received response', [
+                Log::info('ErrorTracker received response', [
                     'status_code' => $statusCode,
                     'success' => $success,
                     'response' => (string)$response->getBody()
@@ -316,16 +321,20 @@ class ErrorTracker
                     return true;
                 }
             } catch (\Exception $e) {
-                \Illuminate\Support\Facades\Log::error('Error sending exception to API (attempt ' . ($attempt + 1) . '): ' . $e->getMessage());
+                Log::error('Error sending exception to API (attempt ' . ($attempt + 1) . '): ' . $e->getMessage(), [
+                    'exception' => get_class($e),
+                    'file' => $e->getFile(),
+                    'line' => $e->getLine()
+                ]);
             }
-    
+
             $attempt++;
             
             if ($attempt < $retries) {
                 usleep(200000); // 200ms
             }
         }
-    
+
         return $success;
     }
 }
