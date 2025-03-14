@@ -268,20 +268,31 @@ class ErrorTracker
         $retries = config('error-tracker.http_client.retry', 3);
         $attempt = 0;
         $success = false;
-
+    
+        // Configure the HTTP client with options to prevent redirect conversion
+        $this->httpClient = new \GuzzleHttp\Client([
+            'timeout' => config('error-tracker.http_client.timeout', 5),
+            'allow_redirects' => false, // Prevent automatic redirection
+        ]);
+    
         while ($attempt < $retries && !$success) {
             try {
-                // Log the request details
+                // Try both HTTP and HTTPS
+                $protocol = $attempt % 2 == 0 ? 'https' : 'http';
+                $baseUrl = rtrim($this->dashboardUrl, '/');
+                $baseUrl = preg_replace('#^https?://#', $protocol . '://', $baseUrl);
+                
+                $url = $baseUrl . '/api/errors';
+                
                 \Illuminate\Support\Facades\Log::info('ErrorTracker sending request', [
-                    'url' => rtrim($this->dashboardUrl, '/') . '/api/errors',
-                    'method' => 'POST',
-                    'app_id' => $this->appId
+                    'url' => $url,
+                    'attempt' => $attempt + 1,
+                    'protocol' => $protocol
                 ]);
-
-                // Explicitly specify POST method
+    
                 $response = $this->httpClient->request(
                     'POST',
-                    rtrim($this->dashboardUrl, '/') . '/api/errors',
+                    $url,
                     [
                         'headers' => [
                             'Authorization' => 'Bearer ' . $this->apiKey,
@@ -292,11 +303,35 @@ class ErrorTracker
                         'http_errors' => false,
                     ]
                 );
-
+    
                 $statusCode = $response->getStatusCode();
+                
+                // If we get a redirect, follow it manually as POST
+                if ($statusCode >= 300 && $statusCode < 400 && $response->hasHeader('Location')) {
+                    $redirectUrl = $response->getHeader('Location')[0];
+                    \Illuminate\Support\Facades\Log::info('Following redirect as POST', [
+                        'redirect_url' => $redirectUrl
+                    ]);
+                    
+                    $response = $this->httpClient->request(
+                        'POST',
+                        $redirectUrl,
+                        [
+                            'headers' => [
+                                'Authorization' => 'Bearer ' . $this->apiKey,
+                                'Content-Type' => 'application/json',
+                                'Accept' => 'application/json',
+                            ],
+                            'json' => $data,
+                            'http_errors' => false,
+                        ]
+                    );
+                    
+                    $statusCode = $response->getStatusCode();
+                }
+                
                 $success = $statusCode >= 200 && $statusCode < 300;
                 
-                // Log the response
                 \Illuminate\Support\Facades\Log::info('ErrorTracker received response', [
                     'status_code' => $statusCode,
                     'success' => $success
@@ -305,18 +340,17 @@ class ErrorTracker
                 if ($success) {
                     return true;
                 }
-            } catch (RequestException $e) {
+            } catch (\Exception $e) {
                 \Illuminate\Support\Facades\Log::error('Error sending exception to API (attempt ' . ($attempt + 1) . '): ' . $e->getMessage());
             }
-
+    
             $attempt++;
             
-            // Add a small delay before retrying
             if ($attempt < $retries) {
                 usleep(200000); // 200ms
             }
         }
-
+    
         return $success;
     }
 }
