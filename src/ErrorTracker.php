@@ -251,43 +251,24 @@ class ErrorTracker
      * @param  array  $data
      * @return bool
      */
+// In src/ErrorTracker.php, modify the sendToApi method:
     protected function sendToApi(array $data)
     {
-        $retries = config('error-tracker.http_client.retry', 3);
-        $attempt = 0;
-        $success = false;
-
-        while ($attempt < $retries && !$success) {
-            try {
-                $response = $this->httpClient->post(
-                    rtrim($this->dashboardUrl, '/') . '/api/errors',
-                    [
-                        'headers' => [
-                            'Authorization' => 'Bearer ' . $this->apiKey,
-                            'Content-Type' => 'application/json',
-                            'Accept' => 'application/json',
-                        ],
-                        'json' => $data,
-                    ]
-                );
-
-                $success = $response->getStatusCode() >= 200 && $response->getStatusCode() < 300;
-                
-                if ($success) {
-                    return true;
-                }
-            } catch (RequestException $e) {
-                Log::error('Error sending exception to API (attempt ' . ($attempt + 1) . '): ' . $e->getMessage());
-            }
-
-            $attempt++;
-            
-            // Add a small delay before retrying
-            if ($attempt < $retries) {
-                usleep(200000); // 200ms
-            }
-        }
-
+        // Debug the request
+        Log::info('Sending error to dashboard', [
+            'url' => rtrim($this->dashboardUrl, '/') . '/api/errors',
+            'app_id' => $this->appId,
+            'api_key' => substr($this->apiKey, 0, 10) . '...' // Don't log full key
+        ]);
+        
+        // Rest of the method...
+        
+        // Log response
+        Log::info('API response', [
+            'success' => $success,
+            'attempt' => $attempt
+        ]);
+        
         return $success;
     }
 }
