@@ -63,6 +63,17 @@ class ErrorTracker
      */
     public function reportException(Throwable $exception)
     {
+        \Illuminate\Support\Facades\Log::info('ErrorTracker reportException called', [
+            'exception' => get_class($exception),
+            'message' => $exception->getMessage()
+        ]);
+    
+        // Check if error tracking is enabled
+        if (!config('error-tracker.enabled', true)) {
+            \Illuminate\Support\Facades\Log::info('ErrorTracker is disabled');
+            return false;
+        }
+        
         // Check if error tracking is enabled
         if (!config('error-tracker.enabled', true)) {
             return false;
