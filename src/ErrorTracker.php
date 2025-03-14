@@ -265,21 +265,58 @@ class ErrorTracker
 // In src/ErrorTracker.php, modify the sendToApi method:
     protected function sendToApi(array $data)
     {
-        // Debug the request
-        Log::info('Sending error to dashboard', [
-            'url' => rtrim($this->dashboardUrl, '/') . '/api/errors',
-            'app_id' => $this->appId,
-            'api_key' => substr($this->apiKey, 0, 10) . '...' // Don't log full key
-        ]);
-        
-        // Rest of the method...
-        
-        // Log response
-        Log::info('API response', [
-            'success' => $success,
-            'attempt' => $attempt
-        ]);
-        
+        $retries = config('error-tracker.http_client.retry', 3);
+        $attempt = 0;
+        $success = false;
+
+        while ($attempt < $retries && !$success) {
+            try {
+                // Log the request details
+                \Illuminate\Support\Facades\Log::info('ErrorTracker sending request', [
+                    'url' => rtrim($this->dashboardUrl, '/') . '/api/errors',
+                    'method' => 'POST',
+                    'app_id' => $this->appId
+                ]);
+
+                // Explicitly specify POST method
+                $response = $this->httpClient->request(
+                    'POST',
+                    rtrim($this->dashboardUrl, '/') . '/api/errors',
+                    [
+                        'headers' => [
+                            'Authorization' => 'Bearer ' . $this->apiKey,
+                            'Content-Type' => 'application/json',
+                            'Accept' => 'application/json',
+                        ],
+                        'json' => $data,
+                        'http_errors' => false,
+                    ]
+                );
+
+                $statusCode = $response->getStatusCode();
+                $success = $statusCode >= 200 && $statusCode < 300;
+                
+                // Log the response
+                \Illuminate\Support\Facades\Log::info('ErrorTracker received response', [
+                    'status_code' => $statusCode,
+                    'success' => $success
+                ]);
+                
+                if ($success) {
+                    return true;
+                }
+            } catch (RequestException $e) {
+                \Illuminate\Support\Facades\Log::error('Error sending exception to API (attempt ' . ($attempt + 1) . '): ' . $e->getMessage());
+            }
+
+            $attempt++;
+            
+            // Add a small delay before retrying
+            if ($attempt < $retries) {
+                usleep(200000); // 200ms
+            }
+        }
+
         return $success;
     }
 }
